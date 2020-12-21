@@ -12,7 +12,7 @@
   *
   *      - SystemCoreClock variable: Contains the core clock (HCLK), it can be used
   *                                  by the user application to setup the SysTick 
-  *                                  timer or configure other parameters.
+  *                                  timer or configure other parameters
   *                                     
   *      - SystemCoreClockUpdate(): Updates the variable SystemCoreClock and must
   *                                 be called whenever the core clock is changed
@@ -22,29 +22,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright (c) 2016 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -88,9 +72,9 @@
   */
 
 /************************* Miscellaneous Configuration ************************/
-/*!< Uncomment the following line if you need to use external SDRAM mounted
+/*!< Uncomment the following line if you need to use QSPI memory mounted
      on DK as data memory  */
-/* #define DATA_IN_ExtSDRAM */
+#define DATA_IN_QSPI
 
 /*!< Uncomment the following line if you need to relocate your vector Table in
      Internal SRAM. */
@@ -123,7 +107,18 @@
                is no need to call the 2 first functions listed above, since SystemCoreClock
                variable is updated automatically.
   */
+
+#if defined(__CC_ARM)
+  uint32_t SystemCoreClock __attribute__((section("NoInit"),zero_init)); /* Uninitialized Variable */
+
+#elif defined(__ICCARM__)
+  __no_init uint32_t SystemCoreClock;
+
+#elif defined(__GNUC__)
   uint32_t SystemCoreClock = 16000000;
+
+#endif
+
   const uint8_t AHBPrescTable[16] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 6, 7, 8, 9};
   const uint8_t APBPrescTable[8] = {0, 0, 0, 0, 1, 2, 3, 4};
 
@@ -134,9 +129,10 @@
 /** @addtogroup STM32F7xx_System_Private_FunctionPrototypes
   * @{
   */
-#if defined (DATA_IN_ExtSDRAM)
+#if defined (DATA_IN_QSPI)
+  static void SetSysClk(void);
   static void SystemInit_ExtMemCtl(void); 
-#endif /* DATA_IN_ExtSDRAM */
+#endif /* DATA_IN_QSPI */
 
 /**
   * @}
@@ -155,6 +151,7 @@
   */
 void SystemInit(void)
 {
+  SystemCoreClock = 16000000;
   /* FPU settings ------------------------------------------------------------*/
   #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
     SCB->CPACR |= ((3UL << 10*2)|(3UL << 11*2));  /* set CP10 and CP11 Full Access */
@@ -178,13 +175,15 @@ void SystemInit(void)
   /* Disable all interrupts */
   RCC->CIR = 0x00000000;
 
-#if defined (DATA_IN_ExtSDRAM)
-  SystemInit_ExtMemCtl(); 
-#endif /* DATA_IN_ExtSDRAM */
+#if defined (DATA_IN_QSPI)
+  SetSysClk();
+  SystemCoreClockUpdate();
+  SystemInit_ExtMemCtl();
+#endif /* DATA_IN_QSPI */
 
   /* Configure the Vector Table location add offset address ------------------*/
 #ifdef VECT_TAB_SRAM
-  SCB->VTOR = SRAM1_BASE | VECT_TAB_OFFSET; /* Vector Table Relocation in Internal SRAM */
+  SCB->VTOR = RAMDTCM_BASE | VECT_TAB_OFFSET; /* Vector Table Relocation in Internal SRAM */
 #else
   SCB->VTOR = FLASH_BASE | VECT_TAB_OFFSET; /* Vector Table Relocation in Internal FLASH */
 #endif
@@ -274,155 +273,352 @@ void SystemCoreClockUpdate(void)
   SystemCoreClock >>= tmp;
 }
 
-#if defined (DATA_IN_ExtSDRAM)
+#if defined (DATA_IN_QSPI)
+/**
+  * @brief  Configures the clock at 216MHz.
+  *         Called in startup_stm32f7xx.s before jump to main.
+  *         This function configures the clock for fast access to external memories
+  * @param  None
+  * @retval None
+  */
+void SetSysClk(void)
+{
+  register uint32_t tmpreg = 0, timeout = 0xFFFF;
+  
+/******************************************************************************/
+/*            PLL (clocked by HSE) used as System clock source                */
+/******************************************************************************/
+  
+/************************* PLL Parameters for clock at 216MHz******************/
+  uint32_t PLL_M = 25,PLL_Q = 9, PLL_R = 7, PLL_N = 432, PLL_P = 2;
+  
+  /* Enable Power Control clock */
+  RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+ 
+  /* Config Voltage Scale 1 */
+  PWR->CR1 |= PWR_CR1_VOS;
+  
+  /* Enable HSE */
+  RCC->CR |= ((uint32_t)RCC_CR_HSEON);
+ 
+  /* Wait till HSE is ready and if Time out is reached exit */
+  do
+  {
+    tmpreg = RCC->CR & RCC_CR_HSERDY;
+  } while((tmpreg != RCC_CR_HSERDY) && (timeout-- > 0));
+  
+  if(timeout != 0)
+  {  
+    /* Select regulator voltage output Scale 1 mode */
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+    
+    PWR->CR1 |= PWR_CR1_VOS;
+    
+    /* Enable Over Drive to reach the 216MHz frequency */
+    /* Enable ODEN */
+    PWR->CR1 |= 0x00010000;
+    timeout = 0xFFFF;
+    /* Wait till ODR is ready and if Time out is reached exit */
+    do
+    {
+      tmpreg = PWR->CSR1 & PWR_CSR1_ODRDY;
+    } while((tmpreg != PWR_CSR1_ODRDY) && (timeout-- > 0));
+    
+    /* Enable ODSW */
+    PWR->CR1 |= 0x00020000;
+    timeout = 0xFFFF;
+    /* Wait till ODR is ready and if Time out is reached exit */
+    do
+    {
+      tmpreg = PWR->CSR1 & PWR_CSR1_ODSWRDY;
+    } while((tmpreg != PWR_CSR1_ODSWRDY) && (timeout-- > 0)); 
+   
+    /* HCLK = SYSCLK / 1*/
+    RCC->CFGR |= RCC_CFGR_HPRE_DIV1;
+    
+    /* PCLK2 = HCLK / 2*/
+    RCC->CFGR |= RCC_CFGR_PPRE2_DIV2;
+    
+    /* PCLK1 = HCLK / 4*/
+    RCC->CFGR |= RCC_CFGR_PPRE1_DIV4;
+    
+    /* Configure the main PLL */
+    RCC->PLLCFGR = PLL_M | (PLL_N << 6) | (((PLL_P >> 1) -1) << 16) |
+      (RCC_PLLCFGR_PLLSRC_HSE) | (PLL_Q << 24) | (PLL_R << 28);
+    
+    /* Enable the main PLL */
+    RCC->CR |= RCC_CR_PLLON;
+  }  
+  /* Wait that PLL is ready */
+  timeout = 0xFFFF;
+  do
+  {
+    tmpreg = (RCC->CR & RCC_CR_PLLRDY); 
+  } while((tmpreg != RCC_CR_PLLRDY) && (timeout-- > 0));
+  
+  if(timeout != 0)
+  {
+    /* Configure Flash prefetch, Instruction cache, Data cache and wait state */
+    FLASH->ACR = FLASH_ACR_LATENCY_7WS;
+    
+    /* Select the main PLL as system clock source */
+    RCC->CFGR &= (uint32_t)((uint32_t)~(RCC_CFGR_SW));
+    RCC->CFGR |= RCC_CFGR_SW_PLL;
+    
+    timeout = 0xFFFF;
+    do
+    {
+      tmpreg = (RCC->CFGR & RCC_CFGR_SWS); 
+    } while((tmpreg != RCC_CFGR_SWS) && (timeout-- > 0));
+  }   
+}
+
 /**
   * @brief  Setup the external memory controller.
-  *         Called in startup_stm32f7xx.s before jump to main.
-  *         This function configures the external memories (SDRAM)
-  *         This SDRAM will be used as program data memory (including heap and stack).
+  *         Configures the GPIO and the QSPI in order to access the external 
+  *         QSPI memory at the init.
+  *         This function is called when the switch DATA_IN_QSPI is activated in 
+  *         SystemInit() before jump to main.
   * @param  None
   * @retval None
   */
 void SystemInit_ExtMemCtl(void)
 {
-  register uint32_t tmpreg = 0, timeout = 0xFFFF;
-  register __IO uint32_t index;
+  /****************************************************************************/
+  /*                                                                          */
+  /* Configuration of the IOs :                                               */
+  /* --------------------------                                               */
+  /* GPIOF10  : CLK                                                            */
+  /* GPIOB6   : BK1_nCS                                                       */
+  /* GPIOD11   : BK1_IO0/SO                                                    */
+  /* GPIOD12  : BK1_IO1/SI                                                    */
+  /* GPIOE2   : BK1_IO2                                                       */
+  /* GPIOD13  : BK1_IO3                                                       */
+  /*                                                                          */
+  /* Configuration of the QSPI :                                              */
+  /* ---------------------------                                              */
+  /* - Instruction is on one single line                                      */
+  /* - Address is 32-bits on four lines                                       */
+  /* - No alternate bytes                                                     */
+  /* - Ten dummy cycles                                                       */
+  /* - Data is on four lines                                                  */
+  /*                                                                          */
+  /* If the clock is changed :                                                */
+  /* -------------------------                                                */
+  /* - Modify the prescaler in the control register                           */
+  /* - Update the number of dummy cycles on the memory side and on            */
+  /*   communication configuration register                                   */
+  /*                                                                          */
+  /* If the memory is changed :                                               */
+  /* --------------------------                                               */
+  /* - Update the device configuration register with the memory configuration */
+  /* - Modify the instructions with the instruction set of the memory         */
+  /* - Configure the number of dummy cycles as described in memory datasheet  */
+  /* - Modify the data size and alternate bytes according memory datasheet    */
+  /*                                                                          */
+  /****************************************************************************/
+  
+  register uint32_t tmpreg = 0, datareg = 0,tmp = 0, timeout = 0xFFFF;
+  
+  /*--------------------------------------------------------------------------*/
+  /*------------------ Activation of the peripheral clocks -------------------*/
+  /*--------------------------------------------------------------------------*/      
+  /* Enable GPIOB, GPIOD and GPIOE interface clock */ 
+  /* Enable clock of the QSPI */
+  RCC->AHB3ENR |= 0x00000002;
 
-  /* Enable GPIOC, GPIOD, GPIOE, GPIOF, GPIOG and GPIOH interface 
-  clock */
-  RCC->AHB1ENR |= 0x000000FC;
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
   
-  /* Connect PCx pins to FMC Alternate function */
-  GPIOC->AFR[0]  = 0x0000C000;
-  GPIOC->AFR[1]  = 0x00000000;
-  /* Configure PCx pins in Alternate function mode */ 
-  GPIOC->MODER   = 0x00000080;
-  /* Configure PCx pins speed to 50 MHz */
-  GPIOC->OSPEEDR = 0x00000080;
-  /* Configure PCx pins Output type to push-pull */
-  GPIOC->OTYPER  = 0x00000000;
-  /* No pull-up, pull-down for PCx pins */
-  GPIOC->PUPDR   = 0x00000040;
+  /*--------------------------------------------------------------------------*/
+  /*--------------------- Configuration of the I/O pins ----------------------*/
+  /*--------------------------------------------------------------------------*/
+  /* Configure alternate function selection for IO pins */
+  GPIOB->AFR[0] = 0x0A000900; 
+  GPIOE->AFR[0] = 0x00000900; 
+  GPIOD->AFR[1] = 0x00999000; 
   
-  /* Connect PDx pins to FMC Alternate function */
-  GPIOD->AFR[0]  = 0x000000CC;
-  GPIOD->AFR[1]  = 0xCC000CCC;
-  /* Configure PDx pins in Alternate function mode */ 
-  GPIOD->MODER   = 0xA02A000A;
-  /* Configure PDx pins speed to 50 MHz */
-  GPIOD->OSPEEDR = 0xA02A000A;
-  /* Configure PDx pins Output type to push-pull */
-  GPIOD->OTYPER  = 0x00000000;
-  /* No pull-up, pull-down for PDx pins */ 
-  GPIOD->PUPDR   = 0x50150005;
+  /* Configure alternate function mode for IO pins */
+  GPIOB->MODER = 0x000022A0;
+  GPIOE->MODER = 0x00000020;
+  GPIOD->MODER = 0x0A800000;
   
-  /* Connect PEx pins to FMC Alternate function */
-  GPIOE->AFR[0]  = 0xC00000CC;
-  GPIOE->AFR[1]  = 0xCCCCCCCC;
-  /* Configure PEx pins in Alternate function mode */ 
-  GPIOE->MODER   = 0xAAAA800A;
-  /* Configure PEx pins speed to 50 MHz */
-  GPIOE->OSPEEDR = 0xAAAA800A;
-  /* Configure PEx pins Output type to push-pull */
-  GPIOE->OTYPER  = 0x00000000;
-  /* No pull-up, pull-down for PEx pins */ 
-  GPIOE->PUPDR   = 0x55554005;
+  /* Configure output speed for IO pins */
+  GPIOB->OSPEEDR = 0x000030F0;
+  GPIOE->OSPEEDR = 0x00000030;
+  GPIOD->OSPEEDR = 0x0FC00000;
   
-  /* Connect PFx pins to FMC Alternate function */
-  GPIOF->AFR[0]  = 0x00CCCCCC;
-  GPIOF->AFR[1]  = 0xCCCCC000;
-  /* Configure PFx pins in Alternate function mode */ 
-  GPIOF->MODER   = 0xAA800AAA;
-  /* Configure PFx pins speed to 50 MHz */
-  GPIOF->OSPEEDR = 0xAA800AAA;
-  /* Configure PFx pins Output type to push-pull */
-  GPIOF->OTYPER  = 0x00000000;
-  /* No pull-up, pull-down for PFx pins */ 
-  GPIOF->PUPDR   = 0x55400555;
+  /* Configure pull-up or pull-down for IO pins */
+  GPIOB->PUPDR   = 0x00001100;
   
-  /* Connect PGx pins to FMC Alternate function */
-  GPIOG->AFR[0]  = 0x00CC00CC;
-  GPIOG->AFR[1]  = 0xC000000C;
-  /* Configure PGx pins in Alternate function mode */ 
-  GPIOG->MODER   = 0x80020A0A;
-  /* Configure PGx pins speed to 50 MHz */
-  GPIOG->OSPEEDR = 0x80020A0A;
-  /* Configure PGx pins Output type to push-pull */
-  GPIOG->OTYPER  = 0x00000000;
-  /* No pull-up, pull-down for PGx pins */ 
-  GPIOG->PUPDR   = 0x40010505;
-  
-  /* Connect PHx pins to FMC Alternate function */
-  GPIOH->AFR[0]  = 0x00C0C000;
-  GPIOH->AFR[1]  = 0x00000000;
-  /* Configure PHx pins in Alternate function mode */ 
-  GPIOH->MODER   = 0x00000880;
-  /* Configure PHx pins speed to 50 MHz */
-  GPIOH->OSPEEDR = 0x00000880;
-  /* Configure PHx pins Output type to push-pull */
-  GPIOH->OTYPER  = 0x00000000;
-  /* No pull-up, pull-down for PHx pins */ 
-  GPIOH->PUPDR   = 0x00000440;
-  
-  /* Enable the FMC interface clock */
-  RCC->AHB3ENR |= 0x00000001;
-  
-	/* Configure and enable SDRAM bank1 */
-  FMC_Bank5_6->SDCR[0]  = 0x00001954;
-  FMC_Bank5_6->SDTR[0]  = 0x01115351;
-  
-  /* SDRAM initialization sequence */
-  /* Clock enable command */
-  FMC_Bank5_6->SDCMR = 0x00000011; 
-  tmpreg = FMC_Bank5_6->SDSR & 0x00000020; 
-  while((tmpreg != 0) && (timeout-- > 0))
+  /*--------------------------------------------------------------------------*/
+  /*----------------------- Initialization of the QSPI -----------------------*/
+  /*--------------------------------------------------------------------------*/
+  timeout = 0xFFFF;
+  do
   {
-    tmpreg = FMC_Bank5_6->SDSR & 0x00000020; 
-  }
+    tmpreg = (QUADSPI->SR & QUADSPI_SR_BUSY); 
+  } while((tmpreg != 0) && (timeout-- > 0));
+  
+  if (timeout != 0)
+  {
+    /* Configure device configuration register of QSPI */
+    /* - FSIZE = 23 */
+    QUADSPI->DCR = QUADSPI_DCR_CSHT_0|  23<<16;
+    /* Configure control register of QSPI: precsaler, sample shift and enable QSPI */
+    QUADSPI->CR = (1 << 24) | QUADSPI_CR_SSHIFT|QUADSPI_CR_EN;
+  }  
+  /*--------------------------------------------------------------------------*/
+  /*----------- Configuration of the dummy cycles on flash side --------------*/
+  /*--------------------------------------------------------------------------*/
+  /* Configure communication register to read volatile configuration register */
+  /* - FMODE = Indirect read
+  - DMODE = Data on a single line
+  - IMODE = Instruction on a single line
+  - INSTRUCTION = READ_VOL_CFG_REG_CMD */
+  tmp = QUADSPI->CCR;
+  tmp = tmp& (~(QUADSPI_CCR_FMODE | QUADSPI_CCR_DMODE | QUADSPI_CCR_IMODE | QUADSPI_CCR_INSTRUCTION));
+  tmp |= (QUADSPI_CCR_FMODE_0 | QUADSPI_CCR_DMODE_0 | QUADSPI_CCR_IMODE_0 | 0x85);
+  QUADSPI->CCR = tmp;
+  /* Wait that the transfer is complete */
+  timeout = 0xFFFF;
+  do
+  {
+    tmpreg = (QUADSPI->SR & QUADSPI_SR_TCF); 
+  } while((tmpreg == 0) && (timeout-- > 0));
+  
+  if (timeout != 0)
+  {
+    /* Read received value */
+    datareg = QUADSPI->DR;
+    
+    /* Clear transfer complete flag */
+    QUADSPI->FCR = QUADSPI_FCR_CTCF;
 
-  /* Delay */
-  for (index = 0; index<1000; index++);
-  
-  /* PALL command */
-  FMC_Bank5_6->SDCMR = 0x00000012;           
-  timeout = 0xFFFF;
-  while((tmpreg != 0) && (timeout-- > 0))
-  {
-    tmpreg = FMC_Bank5_6->SDSR & 0x00000020; 
+    /* Wait that the transfer is complete */
+    timeout = 0xFFFF;
+    do
+    {
+      tmpreg = (QUADSPI->SR & QUADSPI_SR_TCF); 
+    } while((tmpreg == 0) && (timeout-- > 0));
+    
+    if (timeout != 0)
+    {
+      /* Clear transfer complete flag */
+      QUADSPI->FCR = QUADSPI_FCR_CTCF;
+      
+      /* Configure communication register to enable write operations */
+      tmp = QUADSPI->CCR;
+      tmp = tmp& (~(QUADSPI_CCR_FMODE | QUADSPI_CCR_DMODE | QUADSPI_CCR_INSTRUCTION));
+      tmp |= 0x06;
+      QUADSPI->CCR = tmp;
+      /* Wait that the transfer is complete */
+      timeout = 0xFFFF;
+      do
+      {
+        tmpreg = (QUADSPI->SR & QUADSPI_SR_TCF); 
+      } while((tmpreg == 0) && (timeout-- > 0));
+      
+      if (timeout != 0)
+      {
+        /* Clear transfer complete flag */
+        QUADSPI->FCR = QUADSPI_FCR_CTCF;
+        
+        /* Configure the mask for the auto-polling mode on write enable bit of status register */
+        QUADSPI->PSMKR = 0x2;
+        
+        /* Configure the value for the auto-polling mode on write enable bit of status register */
+        QUADSPI->PSMAR = 0x2;
+        
+        /* Configure the auto-polling interval */
+        QUADSPI->PIR   = 0x10;
+        
+        /* Configure control register to automatically stop the auto-polling mode */
+        QUADSPI->CR = (QUADSPI->CR&(~QUADSPI_CR_APMS));
+        QUADSPI->CR |= QUADSPI_CR_APMS;
+        
+        /* Configure communication register to perform auto-polling mode on status register */           
+        tmp = QUADSPI->CCR;
+        tmp = tmp& (~(QUADSPI_CCR_FMODE | QUADSPI_CCR_DMODE | QUADSPI_CCR_INSTRUCTION));
+        tmp |= (QUADSPI_CCR_FMODE_1 | QUADSPI_CCR_DMODE_0 | 0x05);
+        QUADSPI->CCR = tmp;
+        /* Wait that the status match occurs */
+        timeout = 0xFFFF;
+        do
+        {
+          tmpreg = (QUADSPI->SR & QUADSPI_SR_SMF); 
+        } while((tmpreg == 0) && (timeout-- > 0));
+        
+        if (timeout != 0)
+        {
+          /* Clear status match flag */
+          QUADSPI->FCR = QUADSPI_FCR_CSMF;
+          
+          /* Write volatile configuration register with new dummy cycles */  
+          datareg = (datareg&0xF)| 10<<4;
+          
+          /* Configure communication register to write volatile configuration register */
+          tmp = QUADSPI->CCR;
+          tmp = tmp& (~(QUADSPI_CCR_FMODE | QUADSPI_CCR_INSTRUCTION));
+          tmp |= 0x81;
+          QUADSPI->CCR = tmp;
+          /* Write the value to transmit */
+          QUADSPI->DR = datareg;
+          
+          /* Wait that the transfer is complete */
+          timeout = 0xFFFF;
+          do
+          {
+            tmpreg = (QUADSPI->SR & QUADSPI_SR_TCF); 
+          } while((tmpreg == 0) && (timeout-- > 0));
+          
+          if (timeout != 0)
+          {
+            /* Clear transfer complete flag */
+            QUADSPI->FCR = QUADSPI_FCR_CTCF;
+            
+            /* Perform abort (mandatory workaround for this version of QSPI) */
+            tmp = QUADSPI->CR; 
+            tmp = (tmp&(~QUADSPI_CR_ABORT));
+            QUADSPI->CR = tmp|QUADSPI_CR_ABORT;
+            
+            /* Wait that the transfer is complete */
+            timeout = 0xFFFF;
+            do
+            {
+              tmpreg = (QUADSPI->SR & QUADSPI_SR_TCF); 
+            } while((tmpreg == 0) && (timeout-- > 0));
+            
+            if (timeout != 0)
+            {
+              /* Clear transfer complete flag */
+              QUADSPI->FCR = QUADSPI_FCR_CTCF;
+              
+                /*------------------------------------------------------------*/
+                /*--------- Configuration of the memory-mapped mode ----------*/
+                /*------------------------------------------------------------*/
+                /* Configure communication register for reading sequence in memory-mapped mode */
+                /* - FMODE = Memory-mapped
+                   - DMODE = Data on four lines
+                   - DCYC = 10
+                   - ADSIZE = 24-bit address
+                   - ADMODE = Address on four lines
+                   - IMODE = Instruction on a single line
+                   - INSTRUCTION = QUAD_INOUT_FAST_READ_CMD */
+
+              tmp = QUADSPI->CCR;
+              tmp = tmp& (~(QUADSPI_CCR_FMODE | QUADSPI_CCR_DMODE | QUADSPI_CCR_DCYC | QUADSPI_CCR_ADSIZE | QUADSPI_CCR_ADMODE | QUADSPI_CCR_INSTRUCTION));
+              tmp |= (QUADSPI_CCR_FMODE | QUADSPI_CCR_DMODE |  (10 << POSITION_VAL(QUADSPI_CCR_DCYC)) | QUADSPI_CCR_ADSIZE_1 | QUADSPI_CCR_ADMODE | 0xEB);
+              QUADSPI->CCR = tmp;
+            }
+          }
+        }
+      }
+    }
   }
-  
-  /* Auto refresh command */
-  FMC_Bank5_6->SDCMR = 0x000000F3;
-  timeout = 0xFFFF;
-  while((tmpreg != 0) && (timeout-- > 0))
-  {
-    tmpreg = FMC_Bank5_6->SDSR & 0x00000020; 
-  }
- 
-  /* MRD register program */
-  FMC_Bank5_6->SDCMR = 0x00044014;
-  timeout = 0xFFFF;
-  while((tmpreg != 0) && (timeout-- > 0))
-  {
-    tmpreg = FMC_Bank5_6->SDSR & 0x00000020; 
-  } 
-  
-  /* Set refresh count */
-  tmpreg = FMC_Bank5_6->SDRTR;
-  FMC_Bank5_6->SDRTR = (tmpreg | (0x0000050C<<1));
-  
-  /* Disable write protection */
-  tmpreg = FMC_Bank5_6->SDCR[0]; 
-  FMC_Bank5_6->SDCR[0] = (tmpreg & 0xFFFFFDFF);
-  
-  /*
-   * Disable the FMC bank1 (enabled after reset).
-   * This, prevents CPU speculation access on this bank which blocks the use of FMC during
-   * 24us. During this time the others FMC master (such as LTDC) cannot use it!
-   */
-  FMC_Bank1->BTCR[0] = 0x000030d2;
 }
-#endif /* DATA_IN_ExtSDRAM */
+#endif /* DATA_IN_QSPI*/
 
 /**
   * @}

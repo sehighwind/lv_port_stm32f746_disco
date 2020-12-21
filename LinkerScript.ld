@@ -41,8 +41,9 @@ _Min_Stack_Size = 0x1000; /* required amount of stack */
 /* Specify the memory areas */
 MEMORY
 {
+FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 1024K
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 320K
-FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 1024K
+QSPI (xrw)  : ORIGIN = 0x90000000, LENGTH = 16M
 }
 
 /* Define output sections */
@@ -89,6 +90,20 @@ SECTIONS
     __exidx_end = .;
   } >FLASH
 
+_qspi_init_base = LOADADDR(.qspi);
+  _qspi_init_length = SIZEOF(.qspi);
+  
+   .qspi :
+  {
+    . = ALIGN(4);
+    _qspi_start = .;        /* create a global symbol at qspi start */
+    *(.qspi)         /* .qspi sections */
+    *(.qspi*)        /* .qspi* sections */
+    . = ALIGN(4);
+    _qspi_end = .;         /* define a global symbols at end of qspi */
+    
+  } >QSPI
+  
   .preinit_array     :
   {
     PROVIDE_HIDDEN (__preinit_array_start = .);

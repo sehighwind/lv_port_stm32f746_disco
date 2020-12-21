@@ -16,6 +16,7 @@
 #include "stm32746g_discovery.h"
 #include "stm32746g_discovery_sdram.h"
 #include "stm32746g_discovery_ts.h"
+#include "stm32f7xx_hal.h"
 #include "../Components/rk043fn48h/rk043fn48h.h"
 
 /*********************
@@ -167,6 +168,8 @@ void tft_init(void)
 	/*Set a display buffer*/
 	disp_drv.buffer = &disp_buf_1;
 
+	//disp_drv.gpu_blend_cb = gpu_mem_blend;
+	//disp_drv.gpu_fill_cb = gpu_mem_fill;
 
 	/*Finally register the driver*/
 	our_disp = lv_disp_drv_register(&disp_drv);
@@ -224,6 +227,65 @@ static void ex_disp_flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
     }
 }
 
+#if LV_USE_GPU
+/**
+ * Copy pixels to destination memory using opacity
+ * @param dest a memory address. Copy 'src' here.
+ * @param src pointer to pixel map. Copy it to 'dest'.
+ * @param length number of pixels in 'src'
+ * @param opa opacity (0, OPA_TRANSP: transparent ... 255, OPA_COVER, fully cover)
+ */
+static void gpu_mem_blend(lv_disp_drv_t *disp_drv, lv_color_t * dest, const lv_color_t * src, uint32_t length, lv_opa_t opa)
+{
+
+	/*Wait for the previous operation*/
+	HAL_DMA2D_PollForTransfer(&Dma2dHandle, 100);
+	Dma2dHandle.Init.Mode         = DMA2D_M2M_BLEND;
+	/* DMA2D Initialization */
+	if(HAL_DMA2D_Init(&Dma2dHandle) != HAL_OK)
+	{
+		/* Initialization Error */
+		while(1);
+	}
+
+	Dma2dHandle.LayerCfg[1].InputAlpha = opa;
+    HAL_DMA2D_ConfigLayer(&Dma2dHandle, 1);
+	HAL_DMA2D_BlendingStart(&Dma2dHandle, (uint32_t) src, (uint32_t) dest, (uint32_t)dest, length, 1);
+
+}
+
+static void gpu_mem_fill(lv_disp_drv_t *disp_drv, lv_color_t * dest_buf, lv_coord_t dest_width, const lv_area_t * fill_area, lv_color_t color)
+{
+	/*Wait for the previous operation*/
+		HAL_DMA2D_PollForTransfer(&Dma2dHandle, 100);
+
+	   Dma2dHandle.Init.Mode         = DMA2D_R2M;
+	   /* DMA2D Initialization */
+	   if(HAL_DMA2D_Init(&Dma2dHandle) != HAL_OK)
+	   {
+	     /* Initialization Error */
+	     while(1);
+	   }
+
+	   Dma2dHandle.LayerCfg[1].InputAlpha = 0xff;
+	   HAL_DMA2D_ConfigLayer(&Dma2dHandle, 1);
+
+	   lv_color_t * dest_buf_ofs = dest_buf;
+
+	   dest_buf_ofs += dest_width * fill_area->y1;
+	   dest_buf_ofs += fill_area->x1;
+	   lv_coord_t area_w = lv_area_get_width(fill_area);
+
+	   uint32_t i;
+	   for(i = fill_area->y1; i <= fill_area->y2; i++) {
+		   /*Wait for the previous operation*/
+		   HAL_DMA2D_PollForTransfer(&Dma2dHandle, 100);
+		   HAL_DMA2D_BlendingStart(&Dma2dHandle, (uint32_t) lv_color_to32(color), (uint32_t) dest_buf_ofs, (uint32_t)dest_buf_ofs, area_w, 1);
+		   dest_buf_ofs += dest_width;
+	   }
+
+}
+#endif
 
 /**
  * @brief Configure LCD pins, and peripheral clocks.

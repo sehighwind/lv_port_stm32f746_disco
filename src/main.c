@@ -1,76 +1,92 @@
 
 #include "stm32f7xx.h"
 #include "lvgl/lvgl.h"
-
+#include "main.h"
 #include "hal_stm_lvgl/tft/tft.h"
 #include "hal_stm_lvgl/touchpad/touchpad.h"
 
 #include "lv_examples/lv_examples.h"
 
-static void SystemClock_Config(void);
+static void GpioToggle(void);
+static void CPU_CACHE_Enable(void);
 
 int main(void)
 {
-    HAL_Init();
+/* Enable the CPU Cache */
+  CPU_CACHE_Enable();
 
-    /* Configure the system clock to 216 MHz */
-    SystemClock_Config();
-
-    /* Enable I-Cache */
-    SCB_EnableICache();
-
-    /* Enable D-Cache */
-    SCB_EnableDCache();
+  /* STM32F7xx HAL library initialization:
+       - Configure the Flash prefetch
+       - Systick timer is configured by default as source of time base, but user 
+         can eventually implement his proper time base source (a general purpose 
+         timer for example or other time source), keeping in mind that Time base 
+         duration should be kept 1ms since PPP_TIMEOUT_VALUEs are defined and 
+         handled in milliseconds basis.
+       - Set NVIC Group Priority to 4
+       - Low Level Initialization
+     */
+  HAL_Init();
 
     lv_init();
 
     tft_init();
     touchpad_init();
 
+
+
+    //lv_demo_music();
     lv_demo_widgets();
+    //lv_demo_benchmark();
+    //BSP_LED_Init(LED1);
 
     while (1)
     {
         HAL_Delay(5);
         lv_task_handler();
+		
+		/* Execute the code from QSPI memory ------------------------------------ */
+    	//GpioToggle();
     }
 }
 
-static void SystemClock_Config(void)
+/**
+* @brief  CPU L1-Cache enable.
+* @param  None
+* @retval None
+*/
+static void CPU_CACHE_Enable(void)
 {
-    RCC_ClkInitTypeDef RCC_ClkInitStruct;
-    RCC_OscInitTypeDef RCC_OscInitStruct;
+  /* Enable I-Cache */
+  SCB_EnableICache();
 
-    /* Enable Power Control clock */
-    __HAL_RCC_PWR_CLK_ENABLE();
-
-    /* The voltage scaling allows optimizing the power consumption when the device is
-     clocked below the maximum system frequency, to update the voltage scaling value
-     regarding system frequency refer to product datasheet.  */
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-
-    /*##-1- System Clock Configuration #########################################*/
-    /* Enable HSE Oscillator and activate PLL with HSE as source */
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-    RCC_OscInitStruct.PLL.PLLM = 25;
-    RCC_OscInitStruct.PLL.PLLN = 400;
-    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-    RCC_OscInitStruct.PLL.PLLQ = 8;
-    HAL_RCC_OscConfig(&RCC_OscInitStruct);
-
-    /* Activate the Over-Drive mode */
-    HAL_PWREx_EnableOverDrive();
-
-    /* Select PLL as system clock source and configure the HCLK, PCLK1 and PCLK2
-     clocks dividers */
-    RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
-    HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_6);
+  /* Enable D-Cache */
+  SCB_EnableDCache();
 }
+
+
+/**
+  * @brief  Toggle the GPIOs
+  * @param  None
+  * @retval None
+  */
+#if defined(__CC_ARM)
+ #pragma arm section code = ".qspi"
+ #pragma no_inline
+ static void GpioToggle(void)
+ #elif defined(__ICCARM__)
+ static void GpioToggle(void) @ ".qspi"
+ #elif defined(__GNUC__)
+ static void __attribute__((section(".qspi"), noinline)) GpioToggle(void)
+ #endif
+{
+  static uint32_t lastTick = 0;
+
+  if( HAL_GetTick()-lastTick > 10000 )
+  {
+	  BSP_LED_Toggle(LED1);
+	  lastTick = HAL_GetTick();
+  }
+
+}
+
 
